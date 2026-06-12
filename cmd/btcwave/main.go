@@ -7,6 +7,7 @@ import (
 
 	"github.com/btcwave/btcwave-cli/internal/config"
 	"github.com/btcwave/btcwave-cli/internal/detect"
+	"github.com/btcwave/btcwave-cli/internal/install"
 	"github.com/btcwave/btcwave-cli/internal/state"
 )
 
@@ -194,15 +195,44 @@ func runSetup(jsonMode bool) {
 
 	if s.Phase == state.PhaseInstall {
 		if !jsonMode {
-			fmt.Println("Ready to install Bitcoin Knots.")
-			fmt.Println("This will download, verify, and install the node binary.")
+			fmt.Println("Installing Bitcoin Knots...")
 			fmt.Println()
-			fmt.Println("Next: btcwave setup (re-run to continue)")
-			fmt.Println("      The CLI is resumable — safe to re-run at any point.")
 		}
+
+		if s.Migration && s.ExistingNode != nil && s.ExistingNode.Found {
+			backupPath, err := install.BackupExisting(s.Target, s.ExistingNode, jsonMode)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error backing up existing node: %v\n", err)
+				os.Exit(1)
+			}
+			if !jsonMode && backupPath != "" {
+				fmt.Printf("  Backup saved to: %s\n\n", backupPath)
+			}
+		}
+
+		result, err := install.Download(s.Hardware, s.Target, jsonMode)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error installing: %v\n", err)
+			os.Exit(1)
+		}
+
+		s.Phase = state.PhaseSync
+		s.Save()
+
 		if jsonMode {
-			b, _ := json.Marshal(s)
+			b, _ := json.Marshal(result)
 			fmt.Println(string(b))
+		} else {
+			fmt.Println()
+			fmt.Printf("  Installed: Bitcoin Knots %s\n", result.Version)
+			fmt.Printf("  Binary:    %s\n", result.Binary)
+			fmt.Printf("  Verified:  %v\n", result.Verified)
+			if result.Migrated {
+				fmt.Printf("  Migration: existing node backed up at %s\n", result.BackupPath)
+			}
+			fmt.Println()
+			fmt.Println("Node installed. Next phase: initial block download.")
+			fmt.Println("Re-run: btcwave setup")
 		}
 	}
 }
