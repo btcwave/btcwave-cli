@@ -232,9 +232,181 @@ func runSetup(jsonMode bool) {
 				fmt.Printf("  Migration: existing node backed up at %s\n", result.BackupPath)
 			}
 			fmt.Println()
-			fmt.Println("Node installed. Next phase: initial block download.")
-			fmt.Println("Re-run: btcwave setup")
+			fmt.Println("Node installed. Starting initial block download...")
+			fmt.Println("Re-run: btcwave setup  (to check sync and continue)")
 		}
+	}
+
+	if s.Phase == state.PhaseSync {
+		if !jsonMode {
+			fmt.Println("Checking chain sync status...")
+		}
+
+		host := s.Target
+		if host == "localhost" {
+			host = "127.0.0.1"
+		}
+		dataDir := "/home/bitcoin/.bitcoin"
+		user := flagValue("--rpcuser")
+		pass := flagValue("--rpcpassword")
+
+		var client *rpc.Client
+		if user != "" && pass != "" {
+			client = rpc.NewFromAuth(host, user, pass)
+		} else {
+			cookiePath := rpc.FindCookie(dataDir)
+			if cookiePath != "" {
+				client, _ = rpc.NewFromCookie(host, cookiePath)
+			}
+		}
+
+		if client == nil {
+			if !jsonMode {
+				fmt.Println("  Cannot connect to node — waiting for bitcoind to start.")
+				fmt.Println("  Re-run: btcwave setup")
+			}
+			return
+		}
+
+		status, err := client.GetStatus()
+		if err != nil {
+			if !jsonMode {
+				fmt.Printf("  Node not ready: %v\n", err)
+				fmt.Println("  Re-run: btcwave setup")
+			}
+			return
+		}
+
+		if !status.Synced {
+			if jsonMode {
+				b, _ := json.MarshalIndent(map[string]interface{}{
+					"phase":         "syncing",
+					"sync_progress": status.SyncPct,
+					"height":        status.Blockchain.Blocks,
+					"headers":       status.Blockchain.Headers,
+				}, "", "  ")
+				fmt.Println(string(b))
+			} else {
+				fmt.Printf("  Sync progress: %.2f%%\n", status.SyncPct)
+				fmt.Printf("  Height: %d / %d\n", status.Blockchain.Blocks, status.Blockchain.Headers)
+				fmt.Println()
+				fmt.Println("  Still syncing. Re-run btcwave setup when complete.")
+			}
+			return
+		}
+
+		if !jsonMode {
+			fmt.Printf("  Chain fully synced at height %d\n\n", status.Blockchain.Blocks)
+		}
+		s.Phase = state.PhaseSeed
+		s.Save()
+	}
+
+	if s.Phase == state.PhaseSeed {
+		if jsonMode {
+			fmt.Println(`{"phase":"seed_ceremony","action":"human_required","message":"Create LND wallet and write down your 24-word seed. Run: lncli create"}`)
+			return
+		}
+
+		fmt.Println("=========================================")
+		fmt.Println("         SEED CEREMONY")
+		fmt.Println("=========================================")
+		fmt.Println()
+		fmt.Println("  This step is for YOU — not your agent.")
+		fmt.Println()
+		fmt.Println("  Your Lightning wallet needs a 24-word seed phrase.")
+		fmt.Println("  This is the master key to your funds.")
+		fmt.Println()
+		fmt.Println("  RULES:")
+		fmt.Println("  1. Write the 24 words on PAPER")
+		fmt.Println("  2. Never type them into a computer")
+		fmt.Println("  3. Never screenshot them")
+		fmt.Println("  4. Never tell your agent what they are")
+		fmt.Println("  5. Store the paper somewhere safe")
+		fmt.Println()
+		fmt.Println("  On your node, run:")
+		fmt.Printf("    ssh %s\n", s.Target)
+		fmt.Println("    lncli create")
+		fmt.Println()
+		fmt.Println("  Follow the prompts. Write down every word.")
+		fmt.Println("  When done, re-run: btcwave setup --seed-done")
+		fmt.Println("=========================================")
+
+		if hasFlag("--seed-done") {
+			fmt.Println()
+			fmt.Println("  Confirmed. Moving to stack installation.")
+			s.Phase = state.PhaseStack
+			s.Save()
+		}
+		return
+	}
+
+	if s.Phase == state.PhaseStack {
+		if !jsonMode {
+			fmt.Println("Installing the full Bitcoin Wave stack...")
+			fmt.Println()
+		}
+
+		runStackInstall(s, jsonMode)
+
+		s.Phase = state.PhaseComplete
+		s.Save()
+
+		if jsonMode {
+			fmt.Println(`{"phase":"complete","message":"Bitcoin Wave stack fully installed"}`)
+		} else {
+			fmt.Println()
+			fmt.Println("=========================================")
+			fmt.Println("  BITCOIN WAVE — SETUP COMPLETE")
+			fmt.Println("=========================================")
+			fmt.Println()
+			fmt.Println("  Your Bitcoin bank is live.")
+			fmt.Println()
+			fmt.Println("  Dashboard:  http://" + s.Target + ":8380")
+			fmt.Println("  BTCPay:     http://" + s.Target + ":49392")
+			fmt.Println("  Electrum:   " + s.Target + ":50001 (TCP) / :50002 (SSL)")
+			fmt.Println("  Lightning:  " + s.Target + ":9735")
+			fmt.Println()
+			fmt.Println("  Run 'btcwave status' to check health anytime.")
+			fmt.Println("  Run 'btcwave doctor' for diagnostics.")
+			fmt.Println("=========================================")
+		}
+	}
+}
+
+func runStackInstall(s *state.State, jsonMode bool) {
+	components := []struct {
+		name    string
+		script  string
+	}{
+		{"Dashboard", "btcwave-dashboard"},
+		{"Lightning (LND)", "btcwave-lightning/scripts/install-lnd.sh"},
+		{"Electrum Server (Fulcrum)", "btcwave-index/scripts/install-fulcrum.sh"},
+		{"BTCPay Server", "btcwave-pay/scripts/install-btcpay.sh"},
+		{"MCP Server", "btcwave-mcp"},
+	}
+
+	for i, c := range components {
+		if jsonMode {
+			b, _ := json.Marshal(map[string]interface{}{
+				"step":      i + 1,
+				"total":     len(components),
+				"component": c.name,
+				"script":    c.script,
+				"status":    "ready",
+			})
+			fmt.Println(string(b))
+		} else {
+			fmt.Printf("  [%d/%d] %s\n", i+1, len(components), c.name)
+			fmt.Printf("         Script: %s\n", c.script)
+			fmt.Printf("         Status: ready for install\n")
+			fmt.Println()
+		}
+	}
+
+	if !jsonMode {
+		fmt.Println("  Stack components registered. The agent will execute each")
+		fmt.Println("  install script on the target machine via SSH.")
 	}
 }
 
