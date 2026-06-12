@@ -319,13 +319,16 @@ func runStatus(jsonMode bool) {
 }
 
 func runDoctor(jsonMode bool) {
-	checks := []struct {
-		Name string
-		Fn   func() (string, bool)
-	}{
-		{"state_file", checkStateFile},
-		{"config_file", checkConfigFile},
+	host := flagValue("--host")
+	if host == "" {
+		host = "127.0.0.1"
 	}
+	dataDir := flagValue("--datadir")
+	if dataDir == "" {
+		dataDir = "/home/bitcoin/.bitcoin"
+	}
+	user := flagValue("--rpcuser")
+	pass := flagValue("--rpcpassword")
 
 	type result struct {
 		Name   string `json:"name"`
@@ -334,48 +337,146 @@ func runDoctor(jsonMode bool) {
 	}
 	var results []result
 
+	check := func(name string, fn func() (string, bool)) {
+		detail, ok := fn()
+		status := "pass"
+		if !ok {
+			status = "fail"
+		}
+		results = append(results, result{name, status, detail})
+		if !jsonMode {
+			icon := "OK"
+			if !ok {
+				icon = "!!"
+			}
+			fmt.Printf("  [%s] %s: %s\n", icon, name, detail)
+		}
+	}
+
 	if !jsonMode {
 		fmt.Println("Bitcoin Wave Doctor")
 		fmt.Println("===================")
 	}
 
-	for _, c := range checks {
-		detail, ok := c.Fn()
-		status := "pass"
-		if !ok {
-			status = "fail"
+	check("state_file", func() (string, bool) {
+		_, err := state.Load()
+		if err != nil {
+			return "no state file found", false
 		}
-		results = append(results, result{c.Name, status, detail})
-		if !jsonMode {
-			icon := "OK"
-			if !ok {
-				icon = "FAIL"
+		return "state file present", true
+	})
+
+	check("config_file", func() (string, bool) {
+		s, err := state.Load()
+		if err != nil || s.ConfigPath == "" {
+			return "no config generated yet", false
+		}
+		if _, err := os.Stat(s.ConfigPath); err != nil {
+			return fmt.Sprintf("config missing: %s", s.ConfigPath), false
+		}
+		return fmt.Sprintf("config at %s", s.ConfigPath), true
+	})
+
+	var client *rpc.Client
+	var rpcErr error
+	if user != "" && pass != "" {
+		client = rpc.NewFromAuth(host, user, pass)
+	} else {
+		cookiePath := rpc.FindCookie(dataDir)
+		if cookiePath != "" {
+			client, rpcErr = rpc.NewFromCookie(host, cookiePath)
+		}
+	}
+
+	check("rpc_connection", func() (string, bool) {
+		if client == nil {
+			if rpcErr != nil {
+				return fmt.Sprintf("cookie error: %v", rpcErr), false
 			}
-			fmt.Printf("  [%s] %s: %s\n", icon, c.Name, detail)
+			return "no RPC credentials found", false
+		}
+		status, err := client.GetStatus()
+		if err != nil {
+			return fmt.Sprintf("connection failed: %v", err), false
+		}
+		return fmt.Sprintf("connected — block %d", status.Blockchain.Blocks), true
+	})
+
+	if client != nil {
+		status, err := client.GetStatus()
+		if err == nil {
+			check("chain_sync", func() (string, bool) {
+				if status.Synced {
+					return fmt.Sprintf("fully synced at %d", status.Blockchain.Blocks), true
+				}
+				return fmt.Sprintf("syncing: %.2f%%", status.SyncPct), false
+			})
+
+			check("peer_count", func() (string, bool) {
+				peers := status.Network.Connections
+				if peers >= 4 {
+					return fmt.Sprintf("%d peers (in: %d, out: %d)", peers, status.Network.ConnectionsIn, status.Network.ConnectionsOut), true
+				}
+				return fmt.Sprintf("only %d peers — check network", peers), false
+			})
+
+			check("mempool", func() (string, bool) {
+				if status.Mempool.Loaded {
+					return fmt.Sprintf("%d tx, %.1f MB", status.Mempool.Size, float64(status.Mempool.Bytes)/1e6), true
+				}
+				return "mempool not loaded", false
+			})
+
+			check("txindex", func() (string, bool) {
+				if status.Blockchain.SizeOnDisk > 0 {
+					return "node running with full chain data", true
+				}
+				return "could not verify txindex status", false
+			})
+
+			check("disk_space", func() (string, bool) {
+				gb := float64(status.Blockchain.SizeOnDisk) / 1e9
+				if gb > 0 {
+					return fmt.Sprintf("chain uses %.1f GB", gb), true
+				}
+				return "could not determine disk usage", false
+			})
+
+			check("version", func() (string, bool) {
+				v := status.Network.Subversion
+				isKnots := len(v) > 0 && contains(v, "Knots")
+				if isKnots {
+					return fmt.Sprintf("Bitcoin Knots: %s", v), true
+				}
+				return fmt.Sprintf("Bitcoin Core: %s (should be Knots)", v), false
+			})
 		}
 	}
 
 	if jsonMode {
-		b, _ := json.Marshal(results)
+		b, _ := json.MarshalIndent(results, "", "  ")
 		fmt.Println(string(b))
+	} else {
+		fmt.Println()
+		passed := 0
+		for _, r := range results {
+			if r.Status == "pass" {
+				passed++
+			}
+		}
+		fmt.Printf("  %d/%d checks passed\n", passed, len(results))
 	}
 }
 
-func checkStateFile() (string, bool) {
-	_, err := state.Load()
-	if err != nil {
-		return "no state file found", false
-	}
-	return "state file present", true
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && stringContains(s, sub))
 }
 
-func checkConfigFile() (string, bool) {
-	s, err := state.Load()
-	if err != nil || s.ConfigPath == "" {
-		return "no config generated yet", false
+func stringContains(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
 	}
-	if _, err := os.Stat(s.ConfigPath); err != nil {
-		return fmt.Sprintf("config missing: %s", s.ConfigPath), false
-	}
-	return fmt.Sprintf("config at %s", s.ConfigPath), true
+	return false
 }
