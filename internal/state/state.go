@@ -24,6 +24,7 @@ const (
 type State struct {
 	Phase        Phase                `json:"phase"`
 	LicenseKey   string               `json:"license_key,omitempty"`
+	Tier         string               `json:"tier,omitempty"`
 	Target       string               `json:"target"`
 	Hardware     *detect.Hardware     `json:"hardware,omitempty"`
 	ExistingNode *detect.ExistingNode `json:"existing_node,omitempty"`

@@ -8,6 +8,7 @@ import (
 	"github.com/btcwave/btcwave-cli/internal/config"
 	"github.com/btcwave/btcwave-cli/internal/detect"
 	"github.com/btcwave/btcwave-cli/internal/install"
+	"github.com/btcwave/btcwave-cli/internal/license"
 	"github.com/btcwave/btcwave-cli/internal/rpc"
 	"github.com/btcwave/btcwave-cli/internal/state"
 )
@@ -104,7 +105,27 @@ func runSetup(jsonMode bool) {
 			fmt.Fprintln(os.Stderr, "error: --key is required for initial setup")
 			os.Exit(1)
 		}
+
+		if !jsonMode {
+			fmt.Println("Validating license key...")
+		}
+		redeemed, err := license.Redeem(key)
+		if err != nil {
+			if jsonMode {
+				b, _ := json.Marshal(map[string]string{"error": err.Error()})
+				fmt.Println(string(b))
+			} else {
+				fmt.Fprintf(os.Stderr, "  Key redemption failed: %v\n", err)
+			}
+			os.Exit(1)
+		}
+
+		if !jsonMode {
+			fmt.Printf("  Key accepted — tier: %s\n\n", redeemed.Tier)
+		}
+
 		s.LicenseKey = key
+		s.Tier = redeemed.Tier
 		s.Target = target
 		s.Phase = state.PhaseDetect
 		s.Save()
