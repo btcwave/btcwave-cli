@@ -8,6 +8,7 @@ import (
 	"github.com/btcwave/btcwave-cli/internal/config"
 	"github.com/btcwave/btcwave-cli/internal/detect"
 	"github.com/btcwave/btcwave-cli/internal/install"
+	"github.com/btcwave/btcwave-cli/internal/rpc"
 	"github.com/btcwave/btcwave-cli/internal/state"
 )
 
@@ -238,31 +239,82 @@ func runSetup(jsonMode bool) {
 }
 
 func runStatus(jsonMode bool) {
-	s, err := state.Load()
-	if err != nil {
-		if jsonMode {
-			fmt.Println(`{"installed":false}`)
-		} else {
-			fmt.Println("No Bitcoin Wave installation found.")
-			fmt.Println("Run: btcwave setup --key YOUR-KEY")
+	host := flagValue("--host")
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	dataDir := flagValue("--datadir")
+	if dataDir == "" {
+		dataDir = "/home/bitcoin/.bitcoin"
+	}
+	user := flagValue("--rpcuser")
+	pass := flagValue("--rpcpassword")
+
+	var client *rpc.Client
+	var err error
+
+	if user != "" && pass != "" {
+		client = rpc.NewFromAuth(host, user, pass)
+	} else {
+		cookiePath := rpc.FindCookie(dataDir)
+		if cookiePath == "" {
+			if jsonMode {
+				fmt.Println(`{"error":"no RPC credentials found"}`)
+			} else {
+				fmt.Println("No RPC credentials found.")
+				fmt.Println("Use --rpcuser/--rpcpassword or ensure .cookie exists at --datadir")
+			}
+			os.Exit(1)
 		}
-		return
+		client, err = rpc.NewFromCookie(host, cookiePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading cookie: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	status, err := client.GetStatus()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error querying node: %v\n", err)
+		os.Exit(1)
 	}
 
 	if jsonMode {
-		b, _ := json.Marshal(s)
+		b, _ := json.MarshalIndent(status, "", "  ")
 		fmt.Println(string(b))
-	} else {
-		fmt.Printf("Bitcoin Wave Node Status\n")
-		fmt.Printf("=======================\n")
-		fmt.Printf("  Phase:   %s\n", s.Phase)
-		fmt.Printf("  Target:  %s\n", s.Target)
-		if s.Hardware != nil {
-			fmt.Printf("  Arch:    %s\n", s.Hardware.Arch)
-			fmt.Printf("  Cores:   %d\n", s.Hardware.Cores)
-			fmt.Printf("  Memory:  %d MB\n", s.Hardware.MemoryMB)
-			fmt.Printf("  Disk:    %d GB free\n", s.Hardware.DiskFreeGB)
+		return
+	}
+
+	fmt.Println("Bitcoin Wave Node Status")
+	fmt.Println("========================")
+
+	if status.Blockchain != nil {
+		bc := status.Blockchain
+		if status.Synced {
+			fmt.Println("  Sync:     COMPLETE")
+		} else {
+			fmt.Printf("  Sync:     %.2f%%\n", status.SyncPct)
 		}
+		fmt.Printf("  Height:   %d / %d\n", bc.Blocks, bc.Headers)
+		fmt.Printf("  Chain:    %s\n", bc.Chain)
+		fmt.Printf("  Disk:     %.1f GB\n", float64(bc.SizeOnDisk)/1e9)
+		fmt.Printf("  Pruned:   %v\n", bc.Pruned)
+	}
+
+	if status.Network != nil {
+		n := status.Network
+		fmt.Printf("  Peers:    %d (in: %d, out: %d)\n", n.Connections, n.ConnectionsIn, n.ConnectionsOut)
+		fmt.Printf("  Version:  %s\n", n.Subversion)
+	}
+
+	if status.Mempool != nil {
+		m := status.Mempool
+		fmt.Printf("  Mempool:  %d tx (%.1f MB)\n", m.Size, float64(m.Bytes)/1e6)
+	}
+
+	if status.Mining != nil {
+		hashrate := status.Mining.NetworkHashPS / 1e18
+		fmt.Printf("  Hashrate: %.1f EH/s\n", hashrate)
 	}
 }
 
