@@ -22,11 +22,13 @@ const (
 )
 
 type State struct {
-	Phase      Phase            `json:"phase"`
-	LicenseKey string           `json:"license_key,omitempty"`
-	Target     string           `json:"target"`
-	Hardware   *detect.Hardware `json:"hardware,omitempty"`
-	ConfigPath string           `json:"config_path,omitempty"`
+	Phase        Phase                `json:"phase"`
+	LicenseKey   string               `json:"license_key,omitempty"`
+	Target       string               `json:"target"`
+	Hardware     *detect.Hardware     `json:"hardware,omitempty"`
+	ExistingNode *detect.ExistingNode `json:"existing_node,omitempty"`
+	Migration    bool                 `json:"migration"`
+	ConfigPath   string               `json:"config_path,omitempty"`
 }
 
 func statePath() string {

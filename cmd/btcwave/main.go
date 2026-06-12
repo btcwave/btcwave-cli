@@ -118,13 +118,8 @@ func runSetup(jsonMode bool) {
 			os.Exit(1)
 		}
 		s.Hardware = hw
-		s.Phase = state.PhaseConfig
-		s.Save()
 
-		if jsonMode {
-			b, _ := json.Marshal(hw)
-			fmt.Println(string(b))
-		} else {
+		if !jsonMode {
 			fmt.Printf("  CPU:    %s (%d cores)\n", hw.Arch, hw.Cores)
 			fmt.Printf("  RAM:    %d MB\n", hw.MemoryMB)
 			fmt.Printf("  Disk:   %d GB free\n", hw.DiskFreeGB)
@@ -136,6 +131,47 @@ func runSetup(jsonMode bool) {
 				fmt.Println()
 			}
 		}
+
+		if !jsonMode {
+			fmt.Println("Checking for existing Bitcoin node...")
+		}
+		existing, err := detect.DetectExistingNode(target)
+		if err == nil && existing.Found {
+			s.ExistingNode = existing
+			s.Migration = true
+			if jsonMode {
+				b, _ := json.Marshal(existing)
+				fmt.Println(string(b))
+			} else {
+				fmt.Println("  EXISTING NODE DETECTED")
+				fmt.Printf("  Binary:   %s\n", existing.Binary)
+				fmt.Printf("  Version:  %s\n", existing.Version)
+				if existing.IsKnots {
+					fmt.Println("  Type:     Bitcoin Knots (no binary swap needed)")
+				} else {
+					fmt.Println("  Type:     Bitcoin Core (will migrate to Knots)")
+				}
+				if existing.DataDir != "" {
+					fmt.Printf("  Data dir: %s\n", existing.DataDir)
+				}
+				if existing.ChainSizeGB > 0 {
+					fmt.Printf("  Chain:    %d GB (will be preserved)\n", existing.ChainSizeGB)
+				}
+				fmt.Printf("  txindex:  %v | tor: %v | zmq: %v\n", existing.HasTxIndex, existing.HasTor, existing.HasZMQ)
+				fmt.Println()
+				fmt.Println("  Migration mode: existing config will be backed up,")
+				fmt.Println("  btcwave profile merged on top. No resync required.")
+				fmt.Println()
+			}
+		} else {
+			if !jsonMode {
+				fmt.Println("  No existing node found — fresh install.")
+				fmt.Println()
+			}
+		}
+
+		s.Phase = state.PhaseConfig
+		s.Save()
 	}
 
 	if s.Phase == state.PhaseConfig {
