@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const defaultAPI = "https://btcwave.com"
+const defaultAPI = "https://btcwave.app"
 
 type RedeemResult struct {
 	Status string                 `json:"status"`
